@@ -1,0 +1,17 @@
+# Credentials / connection files -- never commit these
+connection.toml
+*.pem
+*.p8
+.env
+
+# Snowflake CLI / SnowSQL local config
+.snowsql/
+
+# OS / editor cruft
+.DS_Store
+*.swp
+__pycache__/
+*.pyc
+
+# Local scratch
+*.log

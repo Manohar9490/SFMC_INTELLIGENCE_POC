@@ -1,0 +1,123 @@
+apiVersion: v1
+kind: DataContract
+metadata:
+  name: hcp_subscriber_funnel_reconciliation
+  domain: pharma_marketing_hcp
+  owner: data_platform_engineering
+  version: 2.0.0
+  status: active
+  supersedes: 1.0.0   # the Task-based, two-fact-table architecture
+
+description: >
+  Tracks HCPs from DE_HCP_OUTREACH through Automation Studio filtering,
+  Journey Builder, email send, contact outcome, and engagement. v2.0.0
+  consolidates to a single fact table and moves Silver/Gold to Dynamic
+  Tables for automatic incremental refresh.
+
+scope_boundary: >
+  Starts at DE_HCP_OUTREACH as Automation Studio finds it. Loss upstream
+  of that DE (e.g., a CRM/Veeva sync filter) is out of scope.
+
+schema:
+  core_entity: FACT_SUBSCRIBER_CHECKPOINT
+  note: >
+    The ONLY fact table (v1.0.0 had a second, FACT_FUNNEL_RECONCILIATION --
+    removed in v2.0.0; reconciliation is now VW_FUNNEL_RECONCILIATION, a
+    view, so there is exactly one source of truth for funnel events).
+  grain: one row per (HCP, checkpoint)
+  dimensions: [DIM_SUBSCRIBER, DIM_CHECKPOINT, DIM_REASON, DIM_BU_BRAND]
+  facts: [FACT_SUBSCRIBER_CHECKPOINT]
+  consumer_interface: >
+    Consumers query SEMANTIC.VW_* views ONLY. GOLD tables are an
+    implementation detail and are not a supported interface -- this is
+    what lets the fact table's internals change (e.g., adding a
+    checkpoint) without being a breaking change for anyone downstream.
+
+freshness_sla:
+  model: dynamic_table_target_lag
+  note: >
+    v1.0.0 defined freshness as a wall-clock time ("Gold available by
+    08:00 UTC") tied to when a Task happened to run. v2.0.0 defines it as
+    a continuously-held property of the table itself.
+  bronze_ingest_task_schedule: "06:00 UTC daily"
+  silver_target_lag: "30 minutes"
+  gold_target_lag: "DOWNSTREAM (cascades from Silver)"
+  effective_end_to_end_freshness: "at most ~30-40 minutes stale from the last Bronze load, continuously"
+
+quality_sla:
+  reconciliation:
+    - rule: "VW_FUNNEL_RECONCILIATION.UNEXPLAINED_DIFFERENCE = 0 at every checkpoint transition"
+  cross_check_against_automation_studio:
+    - rule: "Recomputed exclusion counts at each checkpoint must match SILVER.AUTOMATION_ACTIVITY_LOG.EXCLUDED_COUNT"
+  governance:
+    - rule: "NPI must carry an active masking policy on SILVER.SUBSCRIBER at all times"
+      threshold: "checked by observability.sql section 5"
+    - rule: "Row access policy on BUSINESS_UNIT_ID must remain attached to SILVER.SUBSCRIBER"
+  dynamic_table_health:
+    - rule: "No Dynamic Table's actual lag may exceed 2x its declared TARGET_LAG for more than one refresh cycle"
+      threshold: "checked by observability.sql section 6, via DYNAMIC_TABLE_REFRESH_HISTORY"
+
+versioning_and_deprecation:
+  semantic_versioning: true
+  breaking_change_examples:
+    - "Renaming SUBSCRIBER_KEY, CHECKPOINT_ID, or REASON_CODE"
+    - "Changing FACT_SUBSCRIBER_CHECKPOINT's grain"
+    - "Removing a column from a SEMANTIC.VW_* view"
+    - "Changing what a checkpoint number means (e.g., re-ordering STEP_SEQUENCE)"
+  non_breaking_change_examples:
+    - "Adding a new checkpoint (new DIM_CHECKPOINT row + one new CTE block in the Gold fact query)"
+    - "Adding a new reason code"
+    - "Onboarding a new Business Unit / Brand"
+    - "Adding a new SEMANTIC.VW_* view"
+  deprecation_policy: >
+    A deprecated view or column is marked with a DEPRECATED_ prefix and
+    kept queryable for 2 minor versions (minimum 90 days) before removal.
+    Announced via #cedp-data-product with the replacement named explicitly.
+  worked_example_v1_to_v2:
+    change: >
+      v1.0.0's FACT_PROGRAM_RECONCILIATION table is removed in v2.0.0;
+      its content is now VW_FUNNEL_RECONCILIATION.
+    classification: "Breaking for anyone querying FACT_PROGRAM_RECONCILIATION directly."
+    migration_path: >
+      Consumers querying the old table switch to
+      SEMANTIC.VW_FUNNEL_RECONCILIATION, which has the same columns
+      (FROM_CHECKPOINT_NAME, TO_CHECKPOINT_NAME, INPUT_COUNT, OUTPUT_COUNT,
+      RAW_DIFFERENCE, EXPLAINED_DIFFERENCE, UNEXPLAINED_DIFFERENCE,
+      UNEXPLAINED_PCT) -- a query-level find/replace of the source object
+      name is sufficient; no logic changes.
+    notice_given: "90 days via #cedp-data-product before FACT_PROGRAM_RECONCILIATION was dropped."
+
+retirement_policy: >
+  A data product version is fully retired (objects dropped) only after
+  (a) the deprecation notice period has elapsed, and (b) observability
+  confirms zero queries against the deprecated object in the trailing
+  30 days (via ACCOUNT_USAGE.QUERY_HISTORY, same mechanism used for usage
+  tracking in observability.sql). Retiring before both conditions are met
+  is treated as an incident, not a routine cleanup step.
+
+consumers:
+  - name: brand_ops_dashboard
+    contact: brand-ops@company.com
+    consumes: [VW_HCP_FUNNEL, VW_BRAND_OPS_LOSS, VW_HCP_LINEAGE]
+  - name: compliance_reporting
+    contact: compliance@company.com
+    consumes: [VW_COMPLIANCE_LOSS, VW_WHERE_AND_WHY_LOST]
+  - name: cortex_analyst
+    contact: data-platform-engineering@company.com
+    consumes: [GOLD.FACT_SUBSCRIBER_CHECKPOINT, GOLD.DIM_SUBSCRIBER, GOLD.DIM_CHECKPOINT, GOLD.DIM_REASON]
+    note: "Cortex Analyst is the one consumer that reads Gold directly, by design of the semantic model tool -- everything else reads SEMANTIC views."
+
+changelog:
+  - version: 2.0.0
+    date: "2026-07-16"
+    change: >
+      Consolidated to a single fact table (removed FACT_PROGRAM_RECONCILIATION).
+      Migrated Silver and Gold to Dynamic Tables (TARGET_LAG-based refresh,
+      replacing Task-driven CREATE OR REPLACE TABLE). Anonymization procedure
+      moved from Silver to Bronze, since Dynamic Tables cannot be updated
+      directly by anything other than their own defining query.
+  - version: 1.0.0
+    date: "2026-07-16"
+    change: "Initial release. Task-driven batch rebuild, two fact tables."
+
+feedback_channel: "#cedp-data-product"
