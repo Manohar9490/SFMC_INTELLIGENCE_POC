@@ -155,6 +155,9 @@ Limitations.
 
 ---
 
+![Funnel](streamlit/funnel.png)
+![Where&Why](streamlit/where&why.png)
+
 ## Known Limitations
 
 - **`reconciliation.sql` is legacy and shouldn't be run.** An earlier
