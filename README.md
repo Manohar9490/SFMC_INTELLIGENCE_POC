@@ -92,11 +92,6 @@ hcp-subscriber-funnel/
 └── README.md                       # This file
 ```
 
-_(If you're also keeping the Cortex Analyst semantic model, architecture
-diagrams, or the full DMDD/DPDD design docs, they slot in as
-`semantic_model.yaml`, `diagrams/`, and `docs/` respectively — not
-pictured above since they weren't in the latest commit.)_
-
 ---
 
 ## Data Model (ERD)
